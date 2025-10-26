@@ -1,0 +1,48 @@
+Route Data Structure
+
+Column	                        Description
+DEMAND_ID	                    Identifier for the demand or commodity. Each unique value represents a specific product flow requirement.
+ROUTE_NBR	                    Unique route identifier. Each route describes a distinct combination of legs serving the same demand.
+ORIGIN_ID	                    Origin location ID (typically a vendor).
+DEST1, DEST2, DEST3, FINAL_DEST	Intermediate and final destination nodes that define the sequence of the route.
+LEG1, LEG2, LEG3	            Leg identifiers used to connect to lane data. Each leg represents a transportation arc between two consecutive nodes.
+LEG1_TYPE, LEG2_TYPE, LEG3_TYPE	Type of movement for each leg (e.g., Vendor to LMD, Vendor to FC, FC to LMD).
+LEG1_DIST, LEG2_DIST, LEG3_DIST	Distance (in miles) traveled for each leg. Zero values indicate the absence of that leg for shorter routes.
+HANDLING_PER_LB	                Handling cost per pound, representing the operational cost associated with managing volume at intermediate nodes.
+WGT	                            Total shipment weight in pounds for this route.
+DIST	                        Total route distance, equal to the sum of leg distances.
+LEGS	                        Number of arcs (legs) that make up the route. Single-leg routes are direct; multi-leg routes include intermediate stops.
+DR_DIST	                        Direct (origin-to-destination) distance if the shipment were sent without intermediate nodes.
+SALES	                        Total sales value of the commodity being shipped on the route.
+COGS	                        Cost of goods sold associated with the commodity.
+FIXED	                        Fixed portion of the route’s travel time, expressed in days.
+LT_UPPER_BD	                    Lead time upper bound (days). Represents the maximum guaranteed delivery time for this demand.
+TRANS_MODE	                    Mode of the final inbound leg to the last-mile delivery. Examples include TL (Truckload) and LTL (Less-Than-Truckload).
+W_HAT	                        Allowed waiting time for this route, computed as the difference between LT_UPPER_BD and the fixed transit time.
+DR_MODE	                        Mode of the equivalent direct route (0 if not direct).
+DR_COST	                        Cost of the direct route. Zero indicates that the route is not a direct movement.
+DR_FREQ	                        Frequency or number of dispatches for the direct route. Zero indicates no direct option available.
+
+
+Lane Data Structure
+
+Column	        Description
+LEG_ID	        Unique identifier for each leg (arc). Each leg connects a specific origin and destination pair.
+MODE	        Shipment mode indicator: 0 = Truckload (TL), 1–3 = Less-Than-Truckload (LTL) categories. Leg + mode = lane.
+ORIGIN_ID	    Origin node ID. 
+ORIGIN_TYPE	    Type of the origin node, either "VND" (vendor) or "FC" (fulfillment center).
+DEST_ID	        Destination node ID.
+DEST_TYPE	    Type of destination node, either "FC“ or "LMD” (last-mile delivery center).
+DISTANCE	    Distance between the origin and destination, in miles.
+MIN_WEIGHT	    Minimum shipment weight allowed for that mode, in pounds.
+MAX_WEIGHT	    Maximum shipment weight capacity for that mode, in pounds.
+COST_PER_POUND	Variable cost per pound for shipment. Applicable only to certain LTL modes (modes 1 and 3 in this data).
+FIXED_COST	    Fixed cost of dispatching one shipment on this lane, regardless of weight.
+TRANSIT_TIME	Estimated travel time (in days) for this lane and mode. LTL modes typically have longer transit times than truckload.
+
+
+Conversion Rate Data Structure:
+
+Column      Description
+LT          Lead time in days.
+PREDICTION  Percentage of customers expected to make a purchase given the lead time.
