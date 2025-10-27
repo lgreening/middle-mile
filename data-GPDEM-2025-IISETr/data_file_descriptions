@@ -1,4 +1,4 @@
-Route Data Structure
+Route Data Structure:
 
 Column	                        Description
 DEMAND_ID	                    Identifier for the demand or commodity. Each unique value represents a specific product flow requirement.
@@ -24,7 +24,7 @@ DR_COST	                        Cost of the direct route. Zero indicates that th
 DR_FREQ	                        Frequency or number of dispatches for the direct route. Zero indicates no direct option available.
 
 
-Lane Data Structure
+Lane Data Structure:
 
 Column	        Description
 LEG_ID	        Unique identifier for each leg (arc). Each leg connects a specific origin and destination pair.
