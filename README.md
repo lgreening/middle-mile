@@ -24,6 +24,29 @@ These models reproduce the numerical results reported in **Tables 2–15** and *
 
 ---
 
+## Data Description
+
+The dataset used in this study is contained in the folder:
+
+data-GPDEM-2025-IISETr/
+
+This folder includes all network, route, lane, and customer choice data required to reproduce the results.  
+Detailed descriptions of each dataset, including column definitions and variable meanings, are provided in:
+
+data-GPDEM-2025-IISETr/data_file_descriptions.txt
+
+
+That text file contains explanations for:
+- **Route Data Structure** — defining shipment routes, legs, and cost components.  
+- **Lane Data Structure** — defining transportation arcs, costs, and transit times.  
+- **Conversion Rate Data Structure** — defining customer purchase probabilities by lead time.
+
+Please refer to `data_file_descriptions.txt` for complete details.
+
+---
+
+---
+
 ## Overview
  
 
