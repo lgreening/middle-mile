@@ -1,4 +1,4 @@
-demandID,pathID,originID,dest1,arc1,arc1_type,arc1_dist,dest2,arc2,arc2_type,arc2_dist,dest3,arc3,arc3_type,arc3_dist,finalDest,varCost,wgt,pathDist,arcs,directDist,sales,cogs,fixedTT,current_ODT,transitMode,w_hat,dirMode,dirCost,dirFreq
+demandID,pathID,originID,dest1,arc1,arc1_type,arc1_dist,dest2,arc2,arc2_type,arc2_dist,dest3,arc3,arc3_type,arc3_dist,finalDest,varCost,wgt,pathDist,arcCt,directDist,sales,cogs,fixedTT,current_ODT,transitMode,w_hat,dirMode,dirCost,dirFreq
 2613,1,12,31329,2984,VND->LMD,1404.6,0,0,0,0.0,0,0,0,0.0,31329,0.0,1143.0,1404.6,1,1404.6,1446.84,634.58,3.5,9.0,LTL,5.5,1.0,1031.73,1.0
 2613,2,12,1004,3136,VND->FC,287.6,31329,633,FC->LMD,1399.5,0,0,0,0.0,31329,0.02,1143.0,1687.1,2,1404.6,1446.84,634.58,4.0,9.0,LTL,5.0,0.0,0.0,0.0
 2613,3,12,1002,3134,VND->FC,1037.2,31329,317,FC->LMD,609.5,0,0,0,0.0,31329,0.02,1143.0,1646.7,2,1404.6,1446.84,634.58,3.4,9.0,LTL,5.6,0.0,0.0,0.0
