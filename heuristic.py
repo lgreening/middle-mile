@@ -8,28 +8,29 @@ import numpy as np
 import time
 import math
 
-from optFunctions import optData, odt_data
+from optFunctions import optData, odt_data as odt_data_Gen
 from heuristicFunctions import heuristicData, select
-from mmtc_odt_bin import build as build_mmtc_odt_bin
-from mmtc_odt_pw import build as build_mmtc_odt_pw
+from mmtc_odt_bin_mip import build as build_mmtc_odt_bin
+from mmtc_odt_pw_mip import build as build_mmtc_odt_pw
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--inst', type=str, help='instance - size and iteration')
 parser.add_argument('--instFolder', type=str, help='directory where instances are stored')
 parser.add_argument('--timeLimit', type=int, help='time limit of mip in seconds')
 parser.add_argument('--resultsFolder', type=str, help='directory where results are stored')
-parser.add_argument('--wsFolder', type=str, help='directory where warm start files are stored')
+parser.add_argument('--wsFolder', type=str, help='directory where warm start files are stored', default=None)
 parser.add_argument('--percPaths', type=float, help='minimum percentage of paths to use for neighborhood')
-parser.add_argument('--loc',type=str,help='location of files')
+parser.add_argument('--loc',type=str,help='location of files',default='')
 parser.add_argument('--minODT', type=int, help='number of units ODT can be reduced by', default=0)
 parser.add_argument('--maxODT', type=int, help='number of units ODT can be increased by', default=0)
 parser.add_argument('--modelType', type=str, help='model type: bin or piecewise', default='bin')
+parser.add_argument('--conserv', type=float, help='conservation value; minimum probability guarantee', default=0.8)
 args = parser.parse_args()
 
 ## maximum number of LTL shipments per week
 maxLTLShip = 5
 ## maximum number of truckload shipments for time constraints
-bigMTime = 14
+bigMTime = 7
 ## maximum number of truckload shipments for volume constraints
 bigMTL = 40
 ## maximum volume (in lbs) per truckload
@@ -39,33 +40,32 @@ Q = 12000
 itTime = 300
 
 ## defining the data
-arcData = f'{args.instFolder}/arcs_{args.inst}.csv'
-pathData = f'{args.instFolder}/paths_{args.inst}.csv'
-dmdData = f'{args.instFolder}/dmds_{args.inst}.csv'
+arcData = f'{args.instFolder}/lanes_data.csv'
+pathData = f'{args.instFolder}/rts_{args.inst}.csv'
 convRateData = f'{args.instFolder}/conversion_rates.csv'
 distanceData = f'{args.instFolder}/distance_matrix.csv'
 
 ## class of data objects for model
-data = optData(dmdData, arcData, pathData, convRateData, maxLTLShip, bigMTime, bigMTL, args.singleMode, Q, args.outsource)
+data = optData(arcData, pathData, maxLTLShip, bigMTime, bigMTL, Q)
 ## class of data objects for ODT-specific data
-odt_data = odt_data(data.dfP, convRateData, args.maxODT, args.minODT)
+odt_data = odt_data_Gen(data.dfP, convRateData, args.maxODT, args.minODT, args.conserv, maxLTLShip, bigMTime)
 
 ## reading in the warm start file
-if args.warmStart:
+if args.wsFolder:
     print('using warm start')
     dfWS = pd.read_csv(f'{args.wsFolder}/ws_{args.inst}.csv')
 else:
     print('no warm start specified, using direct path')
     # use direct path data as warm start
-    dfWS = data.dfP[data.dfP['DR_COST'] > 0].copy()
+    dfWS = data.dfP[data.dfP['dirCost'] > 0].copy()
 
 ## generating the model
 ## and instance name
 model = f'mmtc_odt_{args.modelType}'
 if args.modelType == 'bin':
-    mmtc_odtMip, vars = build_mmtc_odt_bin
+    mmtc_odtMip, vars = build_mmtc_odt_bin(data, odt_data, args.conserv)
 else:
-    mmtc_odtMip, vars = build_mmtc_odt_pw
+    mmtc_odtMip, vars = build_mmtc_odt_pw(data, odt_data, args.conserv)
 
 instNm = f'{model}_Heur_{args.inst}_min{args.minODT}_max{args.maxODT}_{args.timeLimit}s'
 print(instNm)
@@ -127,22 +127,28 @@ chooseODT = False
 ## counts the number of times we optimized for ODTs and aths
 choosePCt = 0
 chooseODTCt = 0
+ctFoc = 0
 ## counts the number of iterations with mip gaps >= 2%
+mipCt = 0
 mipCtP = 0
 mipCtODT = 0
 ## counts the number of iterations with mip gaps < 2%
+mipRedCt = 0
 mipRedCtP = 0
 mipRedCtODT = 0
 ## only for paper 2 (not adj) 
 ### multiplier/step size adjuster for increasing/decreasing neighborhood size
+mipRedIncr = 1
 mipRedIncrP = 1
 mipRedIncrODT = 1
+mipIncr = 1
 mipIncrP = 1
 mipIncrODT = 1
 ## initializing selected to fix all paths to the current solution
 ### paths originating at FCs are always free to change (these are not in pathList)
 selected = heurData.pathList.copy()
 pathsList = heurData.pathList.copy()
+origOrd = []
 ## collecting paths used in the solution and fixing to 0 if not used
 pathsUsed = []
 for p in selected:
@@ -169,7 +175,7 @@ pathLen = percPaths*len(pathsList)
 heurStart = time.time()
 ## while the total heuristic time is less than the timeLimit, continue to iterate
 while currTime <= args.timeLimit*2/3:
-    if args.maxLT == 0 and args.minLT == 0:
+    if args.maxODT == 0 and args.minODT == 0:
         print('alternating heuristic not needed')
         break
     ############################
@@ -188,7 +194,7 @@ while currTime <= args.timeLimit*2/3:
     ############################
     
     ## selecting paths in neighborhood
-    newList, selected, prevVnds, lmdOrd, lmd, fc = select(data, heurData, newList, selNH, prevVnds,
+    newList, selected, prevVnds, lmdOrd, lmd, fc, origOrd = select(data, heurData, newList, selNH, prevVnds,
                                                          lmdOrd, lmd, fc, pathLen, iterCount)
     
     ## freeing selected paths by setting upper bound to 1
@@ -208,8 +214,8 @@ while currTime <= args.timeLimit*2/3:
     heurObj = round(mmtc_odtMip.objVal,2)
     print('Heuristic objective: '+str(heurObj))
     print('Heuristic gap: '+str(round(100*mmtc_odtMip.MIPGap,2))+'%')
-    print('Absolute improvement: '+str(round(preSolu - heurObj,1)))
-    print('Percent improvement: '+str(round(preSolu - heurObj,1)/preSolu *100))
+    print('Absolute improvement: '+str(round(heurObj - preSolu,1)))
+    print('Percent improvement: '+str(round(heurObj - preSolu,1)/preSolu *100))
     objList.append(heurObj)
     lbList.append(round(mmtc_odtMip.objBound,1))
     gapList.append(mmtc_odtMip.MIPGap)
@@ -384,6 +390,7 @@ newList = True
 selNH = neighborhoods[0]
 sel = 1
 prevVnds = []
+origOrd = []
 vnd = 0
 lmd = 0
 print(spacer)
@@ -393,6 +400,7 @@ print(spacer)
 print(spacer)
 print(' ')
 # reducing percPaths since optimizing both paths and ODTs
+ctFoc = 0
 percPaths = args.percPaths/3
 mipRedCt = 0
 mipRedIncr = 1
@@ -421,7 +429,7 @@ while currTime <= args.timeLimit:
     ############################
     
     ## selecting paths in neighborhood
-    newList, selected, prevVnds, lmdOrd, lmd, fc = select(data, heurData, newList, selNH, prevVnds,
+    newList, selected, prevVnds, lmdOrd, lmd, fc , origOrd = select(data, heurData, newList, selNH, prevVnds,
                                                          lmdOrd, lmd, fc, pathLen, iterCount)
     
     ## freeing selected paths by setting upper bound to 1
@@ -440,8 +448,8 @@ while currTime <= args.timeLimit:
     heurObj = round(mmtc_odtMip.objVal,2)
     print('Heuristic objective: '+str(heurObj))
     print('Heuristic gap: '+str(round(100*mmtc_odtMip.MIPGap,2))+'%')
-    print('Absolute improvement: '+str(round(preSolu - heurObj,1)))
-    print('Percent improvement: '+str(round(preSolu - heurObj,1)/preSolu *100))
+    print('Absolute improvement: '+str(round(heurObj - preSolu,1)))
+    print('Percent improvement: '+str(round(heurObj - preSolu,1)/preSolu *100))
     objList.append(heurObj)
     lbList.append(round(mmtc_odtMip.objBound,1))
     gapList.append(mmtc_odtMip.MIPGap)
@@ -570,31 +578,31 @@ contVars = mmtc_odtMip.numVars - mmtc_odtMip.numIntVars
 numConstr = mmtc_odtMip.numConstrs
 
 
-file1 = open(str(args.resultsFolder)+'/'+str(instNm)+"_solveData.csv","w")
+# file1 = open(str(args.resultsFolder)+'/'+str(instNm)+"_solveData.csv","w")
 
-for i in range(len(timeList)):
-    file1.write(f'{iterList[i]},{timeList[i]},{objList[i]},{lbList[i]},{gapList[i]}\n')
+# for i in range(len(timeList)):
+#     file1.write(f'{iterList[i]},{timeList[i]},{objList[i]},{lbList[i]},{gapList[i]}\n')
     
-file1.close()
+# file1.close()
 
 
 
-#instance stats
-numDmds = len(heurData.dfD)
-numVnds = len(heurData.dfD[heurData.dfD['originID'].str.contains('V')]['originID'].unique())
-numFcs = len(heurData.dfD[heurData.dfD['originID'].str.contains('F')]['originID'].unique())
-numLmds = len(heurData.dfD['destID'].unique())
-numPaths = len(data.dfP)
-numArcMode = len(data.dfA)
-numArc = len(data.dfA['arcID'].unique())
-numDirArcMode = len(data.dfA[(data.dfA['originID'].str.contains('V'))&(data.dfA['destID'].str.contains('L'))])
-numDirArc = len(data.dfA[(data.dfA['originID'].str.contains('V'))&(data.dfA['destID'].str.contains('L'))]['arcID'].unique())
-numConArcMode = numArcMode - numDirArcMode
-numConArc = numArc - numDirArc
-totVol = data.dfD['wgt'].sum()
+# #instance stats
+# numDmds = len(heurData.dfD)
+# numVnds = len(heurData.dfD[heurData.dfD['originID'].str.contains('V')]['originID'].unique())
+# numFcs = len(heurData.dfD[heurData.dfD['originID'].str.contains('F')]['originID'].unique())
+# numLmds = len(heurData.dfD['destID'].unique())
+# numPaths = len(data.dfP)
+# numArcMode = len(data.dfA)
+# numArc = len(data.dfA['arcID'].unique())
+# numDirArcMode = len(data.dfA[(data.dfA['originID'].str.contains('V'))&(data.dfA['destID'].str.contains('L'))])
+# numDirArc = len(data.dfA[(data.dfA['originID'].str.contains('V'))&(data.dfA['destID'].str.contains('L'))]['arcID'].unique())
+# numConArcMode = numArcMode - numDirArcMode
+# numConArc = numArc - numDirArc
+# totVol = data.dfD['wgt'].sum()
 
-file2 = open(f"{args.loc}/{model}HeurStats.csv","a")
+# file2 = open(f"{args.loc}/{model}HeurStats.csv","a")
 
-file2.write(f'{args.inst},{binVars},{intVars},{contVars},{numConstr},{objVal},{lwrBd},{gap},{runTime},{args.timeLimit},{numVnds},{numFcs},{numLmds},{numDmds},{totVol},{numPaths},{numArcMode},{numArc},{numConArcMode},{numConArc},{numDirArcMode},{numDirArc},{percPaths}\n')
+# file2.write(f'{args.inst},{binVars},{intVars},{contVars},{numConstr},{objVal},{lwrBd},{gap},{runTime},{args.timeLimit},{numVnds},{numFcs},{numLmds},{numDmds},{totVol},{numPaths},{numArcMode},{numArc},{numConArcMode},{numConArc},{numDirArcMode},{numDirArc},{percPaths}\n')
 
-file2.close()
+# file2.close()

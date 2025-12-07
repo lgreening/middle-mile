@@ -79,51 +79,35 @@ def probChk(w_hat, arcs, prob, lmdMode, maxLTL, maxTL):
 
 #used to prepare dataframes for models
 class optData:
-    def __init__(self, dmdData, arcData, pathData, convRateData, maxLTLShip, bigMTime, bigMTL, singleMode, Q, outsource):
-        self.dfD, self.dfA, self.dfP, self.df_con = self.readFiles(dmdData, arcData, pathData, convRateData, singleMode, outsource)
+    def __init__(self, arcData, pathData, maxLTLShip = 5, bigMTime = 7, bigMTL = 40, Q = 12000):
+        self.dfA, self.dfP = self.readFiles(arcData, pathData)
         self.arcs, self.arcMode, self.arcParams, self.arcPaths, self.bigMVals, self.modeDict, self.fcArcs = self.arcParams(self.dfA, self.dfP, 
-                                                                                                                           singleMode, bigMTL, 
-                                                                                                                           maxLTLShip, bigMTime, Q)
+                                                                                                                         bigMTL, maxLTLShip, bigMTime, Q)
         self.paths, self.dmdPaths, self.pathParams, self.conPaths, self.arcsConstrPaths = self.pathParams(self.dfP)
         self.pathCost, self.arcCosts = self.defObjParams(self.dfA, self.dfP)
-        if singleMode == False:
-            self.arcTL, self.arcLTL, self.maxF = self.timeConstrData(self.dfP, self.dfA, maxLTLShip, bigMTime)
+        self.arcTL, self.arcLTL, self.maxF = self.timeConstrData(self.dfP, self.dfA, maxLTLShip, bigMTime, bigMTL)
 
-    def readFiles(self, dmdData, arcData, pathData, singleMode, outsource):
-        dfD = pd.read_csv(dmdData)
+    def readFiles(self, arcData, pathData):
         dfA = pd.read_csv(arcData)
         dfP = pd.read_csv(pathData).replace(np.nan, '', regex=True)
             
-        if singleMode and outsource == False:
-            print('singleMode, NO outsource')
-            #removing LTL from arcs
-            dfA = dfA[dfA['mode']==0].copy()
-            #removing direct paths AND LTL-specific paths
-            dfP = dfP[(dfP['dirFreq']==0)&(dfP['lmdMode']!='LTL')].copy()  
-            ## removing unnecessary arcs
-            dfA = dfA[(dfA['arcID'].isin(dfP['arc1'].unique()))|
-                     (dfA['arcID'].isin(dfP[dfP['arc2']!=0]['arc2'].unique()))|
-                     (dfA['arcID'].isin(dfP[dfP['arc3']!=0]['arc3'].unique()))|
-                     (dfA['arcID'].isin(dfP[dfP['arc4']!=0]['arc4'].unique()))].copy()
-        else:
-            if singleMode and outsource:
-                print('singleMode, outsource')
-                #keeping directs and removing LTL consolidation routes (i.e., those that use an FC)
-                dfP = dfP[(dfP['dirFreq']>0)|(dfP['lmdMode']!='LTL')].copy()
-                #removing LTL from consolidation arcs, but not direct arcs
-                dfA = dfA[(dfA['mode']==0)|((dfA['originType']=='VND')&(dfA['destType']=='LMD'))].copy()
-            #removing other modes from direct arcs - reduces size of dfA
-            dfDir = dfP[dfP['dirFreq']>=1].copy()
-            dirArcModes = list(zip(dfDir['arc1'],dfDir['dirMode']))
-            dfA['arcMode'] = list(zip(dfA['arcID'],dfA['mode']))
-            dfA = dfA[(dfA['arcMode'].isin(dirArcModes))|
-                               ~((dfA['originType']=='VND')&(dfA['destType']=='LMD'))].copy()
+        # #keeping directs and removing LTL consolidation routes (i.e., those that use an FC)
+        # dfP = dfP[(dfP['dirFreq']>0)|(dfP['transitMode']!='LTL')].copy()
+        #removing arcs not in this path set
+        dfA = dfA[dfA['arcID'].isin(pd.unique(dfP[['arc1','arc2','arc3']].values.ravel()))].copy()
+        # #removing LTL from consolidation arcs, but not direct arcs
+        # dfA = dfA[(dfA['mode']==0)|((dfA['originType']=='VND')&(dfA['destType']=='LMD'))].copy()
         
-        
+        # #removing other modes from direct arcs - reduces size of dfA
+        # dfDir = dfP[dfP['dirFreq']>=1].copy()
+        # dirArcModes = list(zip(dfDir['arc1'],dfDir['dirMode']))
+        # dfA['arcMode'] = list(zip(dfA['arcID'],dfA['mode']))
+        # dfA = dfA[(dfA['arcMode'].isin(dirArcModes))|
+        #                     ~((dfA['originType']=='VND')&(dfA['destType']=='LMD'))].copy()
 
-        return dfD, dfA, dfP
+        return dfA, dfP
     
-    def arcParams(self, dfArcs, dfP, singleMode, bigMTL, maxLTLShip, bigMTime, Q):
+    def arcParams(self, dfArcs, dfP, bigMTL, maxLTLShip, bigMTime, Q):
         #creating lists of indices, where arcMode are all arc/mode combinations excluding VND->LMD arcs,
         ## arcs just includes consolidation arcs
         #collecting unique arc IDs - excluding direct arcs
@@ -139,7 +123,7 @@ class optData:
         arcList = []
         maxArcs = int(dfP['arcCt'].max())
         for a in range(maxArcs):
-            arcList.append(dfP[['demandID','pathID','wgt',f'arc{a+1}']][dfP[f'arc{a+1}']!=''].rename(columns={f'arc{a+1}':'arc'}))
+            arcList.append(dfP[['demandID','pathID','wgt',f'arc{a+1}']][~(dfP[f'arc{a+1}'].isin(['','0',0]))].rename(columns={f'arc{a+1}':'arc'}))
         ## concat all dfs
         df = pd.concat(arcList)
         ## create the dictionary
@@ -148,13 +132,9 @@ class optData:
         df = df.drop_duplicates(subset=['demandID','arc'])
         dfW = df[['arc','wgt']].groupby(by='arc').sum().reset_index()
         totWgts = dict(zip(dfW['arc'],dfW['wgt']))
-        if singleMode:
-            dfAExDir['bigM'] = dfAExDir.apply(lambda x: min(bigMTL,math.ceil(totWgts[x['arcID']]/Q)) if x['mode'] == 0
+        dfAExDir['bigM'] = dfAExDir.apply(lambda x: max(bigMTime,min(bigMTL,math.ceil(totWgts[x['arcID']]/Q))) if x['mode'] == 0
                                                      else maxLTLShip, axis = 1)
-        else:
-            dfAExDir['bigM'] = dfAExDir.apply(lambda x: max(bigMTime,min(bigMTL,math.ceil(totWgts[x['arcID']]/Q))) if x['mode'] == 0
-                                                     else maxLTLShip, axis = 1)
-            
+        
         bigMVals = dict(zip(zip(dfAExDir['arcID'],dfAExDir['mode']),dfAExDir['bigM']))
         # mode dictionary
         modeDict = dfArcs.groupby('arcID')['mode'].apply(list).to_dict()
@@ -169,13 +149,13 @@ class optData:
         #collecting paths for each demand ID
         dmdPaths = dfP.groupby('demandID')['pathID'].apply(list).to_dict()
         #path parameters
-        pathParams = (dfP[['pathID','wgt','w_hat','cVal','arcCt','fixedTT']].set_index(['pathID']).to_dict('index'))
+        pathParams = (dfP[['pathID','wgt','w_hat','arcCt','fixedTT']].set_index(['pathID']).to_dict('index'))
         #removing vendor direct paths - all will have a dirFreq >= 1
         dfP = dfP[dfP['dirFreq']<=0].copy()
         #all consolidation (non-direct) paths
         conPaths = dfP['pathID'].tolist()
         #getting arcs in the time-constrained paths
-        arcsConstrPaths = dict(zip(dfP['pathID'],zip(dfP['arc1'],dfP['arc2'],dfP['arc3'],dfP['arc4'])))
+        arcsConstrPaths = dict(zip(dfP['pathID'],zip(dfP['arc1'],dfP['arc2'],dfP['arc3'])))
         for p in conPaths:
             arcsConstrPaths[p] = [i for i in arcsConstrPaths[p] if i != '' and str(i) != '0']
         
@@ -188,15 +168,16 @@ class optData:
                                           +dfP.handling_per_lb*dfP.wgt.values))
         #going through each arc to collect fixed costs and price per pound
         arcCosts = dfArcs[['arcID', 'mode', 'fixedCost', 'varCost']].set_index(['arcID', 'mode']).to_dict('index')
+    
         return  pathCost, arcCosts
     
-    def timeConstrData(self, dfP, dfA, maxLTLShip, bigMTime):
+    def timeConstrData(self, dfP, dfA, maxLTLShip, bigMTime, bigMTL):
         #time-constrained paths df
         dfCP = dfP[dfP['dirFreq']<=0].copy()
         dfCP['lastArc'] = dfCP.apply(lambda x: x['arc'+str(x['arcCt'])], axis = 1)
         #specifying paths which require truckload or LTL on their final arc
-        arcTL = dict(zip(dfCP[dfCP['lmdMode']=='TL']['pathID'],dfCP[dfCP['lmdMode']=='TL']['lastArc']))
-        arcLTL = dict(zip(dfCP[dfCP['lmdMode']=='LTL']['pathID'],dfCP[dfCP['lmdMode']=='LTL']['lastArc']))
+        arcTL = dict(zip(dfCP[dfCP['transitMode']=='TL']['pathID'],dfCP[dfCP['transitMode']=='TL']['lastArc']))
+        arcLTL = dict(zip(dfCP[dfCP['transitMode']=='LTL']['pathID'],dfCP[dfCP['transitMode']=='LTL']['lastArc']))
         
         maxF = {}
         for m in dfA['mode'].unique():
@@ -204,7 +185,7 @@ class optData:
                 maxF[m] = bigMTime
             else:
                 maxF[m] = maxLTLShip
-        
+                
         return arcTL, arcLTL, maxF
     
 def dirPathCosts(wgt, arc, dfA, maxLTL):
@@ -237,24 +218,32 @@ class odt_data:
       conRates, conDmds, nonConDmds, conPaths, nonConPaths, conODTs, conRMax, dirConRates, nonConODTs,
       pathFix, pathDmd, dirPaths
     """
-    def __init__(self, dfP, conversion_data, maxODT, minODT, maxLTLShip=5, maxHTL=7):
+    def __init__(self, dfP, conversion_data, maxODT, minODT, conserv = 0.8, chgcurve=1, maxLTLShip=5, bigMTime=7):
         # conversion data df
         dfC, self.nomODT = self.build_conversion_df(conversion_data, dfP, minODT, maxODT)
         # conversion-related dictionaries (renamed outputs)
         (self.conRates, self.conDmds, self.nonConDmds, self.conPaths,
          self.nonConPaths, self.conODTs, self.conRMax,
-         self.dirConRates, self.nonConODTs) = self.converData(dfC, dfP, maxODT, minODT, maxLTLShip, maxHTL)
+         self.dirConRates, self.nonConODTs) = self.converData(dfC, dfP, maxLTLShip, bigMTime, chgcurve)
         # path-level attributes (originally rtFix, rtDmd, dirPaths)
         self.pathDmd, self.dirPaths = self.addData(dfP)
+        # conservatism values for consolidation routes
+        self.cVals, self.cValsFC = self.conservatism(self.conRates, dfP, conserv, maxLTLShip, bigMTime)
 
     
-    def build_conversion_df(conv_rate_file, dfP, minODT, minODTs, maxODT):
+    def build_conversion_df(self, conv_rate_file, dfP, minODT, maxODT):
 
         # Read conversion rate data
         df_con = pd.read_csv(conv_rate_file)
 
         # get current ODT (nomODT) for each demand from dfP
         nomODT = dict(zip(dfP['demandID'], dfP['current_ODT']))
+
+        # calculate minimum possible ODTs for consolidation routes to filter conRates later
+        dfPmin = dfP[dfP['arc1_type']!='VND->LMD'].copy()
+        dfPmin['minTime'] = dfPmin.apply(lambda x: math.ceil(x['fixedTT']+0.5*x['arcCt']), axis = 1)
+        dfPmin = dfPmin.sort_values(by=['demandID','minTime']).drop_duplicates(subset='demandID').copy()
+        minODTs = dict(zip(dfPmin.demandID,dfPmin.minTime))
 
         # Filter and expand demandIDs
         df_cr = dfP[dfP['arc1_type'] == 'VND->FC'][['demandID']].drop_duplicates()
@@ -277,7 +266,7 @@ class odt_data:
         df_con = df_con[df_con.apply(should_keep, axis=1)].copy()
         return df_con, nomODT
 
-    def converData(self, dfCon, dfP, maxLTLShip, maxHTL):
+    def converData(self, dfCon, dfP, maxLTLShip, bigMTime, chgCurve):
         """
         Build conversion rate dictionaries and lists.
         Returns (in this order):
@@ -298,14 +287,14 @@ class odt_data:
 
         # calculate minimum possible ODTs for consolidation routes to filter conRates later
         hMinLTL = (7/maxLTLShip)/2
-        hMinTL = (7/maxHTL)/2
-        dfP['minTime'] = dfP.apply(lambda x: np.ceil(hMinLTL+hMinTL*(x['arcs']-1) + x['fixedTT']) 
+        hMinTL = (7/bigMTime)/2
+        dfP['minTime'] = dfP.apply(lambda x: np.ceil(hMinLTL+hMinTL*(x['arcCt']-1) + x['fixedTT']) 
                                                 if x['transitMode']=='LTL'
-                                                else np.ceil(hMinTL*x['arcs'] + x['fixedTT']), 
+                                                else np.ceil(hMinTL*x['arcCt'] + x['fixedTT']), 
                                                 axis = 1)
-        dfP = dfP.sort_values(by=['demandID', 'minTime']).drop_duplicates(subset='demandID').copy()
+        dfMinP = dfP.sort_values(by=['demandID', 'minTime']).drop_duplicates(subset='demandID').copy()
 
-        minODTs = dict(zip(dfP.demandID, dfP.minTime))
+        minODTs = dict(zip(dfMinP.demandID, dfMinP.minTime))
         nomR = dict(zip(dfCR.demandID, dfCR.nomRate))
 
         # attach nominal rates onto dfCon and compute change factor 'chg'
@@ -321,6 +310,20 @@ class odt_data:
 
         # conRates mapping (demandID, ODT) -> chg for feasible ODTs
         conRates = dict(zip(zip(dfCon.demandID.values, dfCon.ODT.values), dfCon.chg.values))
+
+        #adjusting the conversion rates for sensitivity experiments
+        if chgCurve != 1:
+            for key in conRates:
+                if conRates[key] > 1:
+                    conRates[key] = 1+(conRates[key]-1)*chgCurve
+                elif conRates[key] < 1:
+                    conRates[key] = 1-(1-conRates[key])*chgCurve
+            for key in dirConRates:
+                if dirConRates[key] > 1:
+                    dirConRates[key] = 1+(dirConRates[key]-1)*chgCurve
+                elif dirConRates[key] < 1:
+                    dirConRates[key] = 1-(1-dirConRates[key])*chgCurve
+
 
         # conversion-demand list (demands that have consolidation options)
         conDmds = dfCR['demandID'].tolist()
@@ -357,7 +360,39 @@ class odt_data:
         pathDmd = dict(zip(dfP['pathID'], dfP['demandID']))
         dPaths = dfP[dfP['arc1_type'] == 'VND->LMD'].copy()
         dirPaths = dict(zip(dPaths['demandID'], dPaths['pathID']))
+
         return pathDmd, dirPaths
+    
+    def conservatism(self, conRates, dfP, conserv, maxLTLShip, bigMTime):
+        dfLTs = pd.Series(conRates).reset_index()   
+        dfLTs.columns = ['demandID', 'current_ODT', 'conv']
+
+        dfConP = dfP[dfP['arc1_type']=='VND->FC'].copy()
+        dfConP = dfConP.drop(columns='current_ODT')
+        dfConP = pd.merge(dfConP,dfLTs, on=['demandID'])
+        dfConP = dfConP[dfConP['current_ODT'] >= dfConP['fixedTT']+dfConP['arcCt']*0.5].copy()
+        dfConP['w_hat'] = dfConP['current_ODT']-dfConP['fixedTT']
+
+        #adjusting conservatism values for each route
+        #adjusting conservatism values for each route if c != 0.5
+        if conserv == 0.5:
+            dfConP['cVal'] = 0.5
+        else:
+            dfConP['cVal'] = dfConP.apply(lambda x: probChk(x['w_hat'],x['arcCt'],conserv,x['transitMode'],maxLTLShip,bigMTime), axis = 1)
+        dfConP = dfConP[(dfConP['cVal']!=1)].copy()
+        #pulling the conservatism values 
+        cVals = dict(zip(zip(dfConP['pathID'],dfConP['current_ODT']), dfConP['cVal']))
+
+        dfFCP = dfP[dfP['arc1_type'].isin(['FC->FC','FC->LMD'])].copy()
+        if conserv == 0.5:
+            dfFCP['cVal'] = 0.5
+        else:
+            dfFCP['cVal'] = dfFCP.apply(lambda x: probChk(x['w_hat'],x['arcCt'],conserv,x['transitMode'],maxLTLShip,bigMTime), axis = 1)
+        dfFCP = dfFCP[(dfFCP['cVal']!=1)].copy()
+
+        cValsFC = dict(zip(dfFCP['pathID'],dfFCP['cVal']))
+
+        return cVals, cValsFC
 
 def defPMObj(data, odt_data, conserv):
     """
@@ -374,16 +409,15 @@ def defPMObj(data, odt_data, conserv):
     dfP[['dirMode', 'dirCOGS', 'dirSales', 'dirCost', 'dirFreq', 'dirODT', 
                 'dirWgt', 'dirConR','ODT_max','fixedTT',
                     'w_hat']] = dfP.apply(lambda x: dirPathCostsPM(x['demandID'], x['wgt'], x['arc1'], 
-                                                                        dfA, conserv, sales, cogs, odt_data.dirConRates, odt_data.conODTs, 
+                                                                        dfA, conserv, x['sales'], x['cogs'], odt_data.dirConRates, odt_data.conODTs, 
                                                                         data.arcCosts, DRLaneParams, x['current_ODT'])
                                                     if x['arc1_type']=='VND->LMD' 
                                                     else pd.Series({'dirMode':0, 'dirCOGS':0, 'dirSales':0, 'dirCost':0, 'dirFreq':0, 
                                                                     'dirODT':0, 'dirWgt':0, 'dirConR':0,'ODT_max':0,
-                                                                    'fixedTT':x['fixedFF'], 'w_hat':x['w_hat']}),
+                                                                    'fixedTT':x['fixedTT'], 'w_hat':x['w_hat']}),
                                                             axis = 1)
 
     # Handling cost per pound
-    dirPathCost = dict(zip(dfP.pathID.values,dfP.dirCost.values))
     ppCost = dict(zip(dfP.pathID.values,dfP.handling_per_lb.values))
     # drop duplicates by demand to form sales / cogs per demand
     dfP = dfP.drop_duplicates(subset='demandID')
@@ -393,14 +427,16 @@ def defPMObj(data, odt_data, conserv):
     # for directs
     dirPathList = dfP[dfP['arc1_type']=='VND->LMD']['pathID'].tolist()
     dirSales = dict(zip(dfP[dfP['pathID'].isin(dirPathList)]['demandID'],dfP[dfP['pathID'].isin(dirPathList)]['dirSales']))
-    dirCOGS = dict(zip(dfP[dfP['pathID'].isin(dirPathList)]['demandID'],dfP[dfP['pathID'].isin(dirPathList)]['dirCogs']))
+    dirCOGS = dict(zip(dfP[dfP['pathID'].isin(dirPathList)]['demandID'],dfP[dfP['pathID'].isin(dirPathList)]['dirCOGS']))
+    dirPathCost = dict(zip(dfP[dfP['pathID'].isin(dirPathList)]['pathID'],dfP[dfP['pathID'].isin(dirPathList)]['dirCost']))
+
     return ppCost, dirPathCost, sales, cogs, dirSales, dirCOGS
 
 
 
 def dirPathCostsPM(comm, wgt, l, dfL, conserv, sales, cogs, conRates, conLTsC, laneCosts, laneParams, ltUpperBd, bigMTL = 7, 
                 maxLTLShip = 5):
-    prof = sales[comm] - cogs[comm]
+    prof = sales - cogs
     la = dfL[dfL['arcID']==l].copy()
     #Initiating the model
     cnd = gp.Model(name = 'PM_MMCW_dir')
@@ -416,7 +452,6 @@ def dirPathCostsPM(comm, wgt, l, dfL, conserv, sales, cogs, conRates, conLTsC, l
     add = {}
     for lt in lts:
         if lt > maxLT:
-            # print('removing '+str(lt))
             conLTsC[comm].remove(lt)
             if comm in add:
                 add[comm].append(lt)
@@ -479,7 +514,7 @@ def dirPathCostsPM(comm, wgt, l, dfL, conserv, sales, cogs, conRates, conLTsC, l
     cnd.addConstr(gp.quicksum(w_vars[t] for t in conLTsC[comm]) == 1)
     
     #lead time constraint
-    cnd.addConstrs(7*conserv[1]*gp.quicksum(1/f*z_vars[m,f] for f in fVal[m]) <=
+    cnd.addConstrs(7*conserv*gp.quicksum(1/f*z_vars[m,f] for f in fVal[m]) <=
                      gp.quicksum(t*w_vars[t] for t in conLTsC[comm]) 
                        - gp.quicksum(laneParams[(l,m)]['transitTime']*z_vars[m,f] for f in fVal[m])
                    for m in la['mode'].tolist())
@@ -492,17 +527,15 @@ def dirPathCostsPM(comm, wgt, l, dfL, conserv, sales, cogs, conRates, conLTsC, l
             mode = m
             freq = f
             fixed = laneParams[(l,m)]['transitTime']
-            # print(f'mode {mode}, freq {freq}, fixed {fixed}')
     cost = round(cnd.objVal, 2)
     for t in conLTsC[comm]:
         if round(w_vars[t].x) == 1:
             lt = t
             ltWgt = conRates[comm,t]*wgt  
             conRt = conRates[comm,t]
-            # print(f'lt {lt}, ltWgt {ltWgt}, conRt {conRt}')
 
-    cogs = round(cogs[comm]*sum(conRates[comm,t]*w_vars[t].x for t in conLTsC[comm]),2)
-    sales = round(sales[comm]*sum(conRates[comm,t]*w_vars[t].x for t in conLTsC[comm]),2)
+    cogs = round(cogs*sum(conRates[comm,t]*w_vars[t].x for t in conLTsC[comm]),2)
+    sales = round(sales*sum(conRates[comm,t]*w_vars[t].x for t in conLTsC[comm]),2)
     logCost = round(sum(laneCosts[(l,m)]['fixedCost']*sum(f*z_vars[m,f].x for f in fVal[m])
                             + laneCosts[(l,m)]['varCost']*v_vars[m].x for m in la['mode'].tolist()),2)
 

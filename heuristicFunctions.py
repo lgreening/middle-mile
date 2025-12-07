@@ -30,9 +30,9 @@ class heuristicData:
         self.dmdsOrig, self.origList, self.origVolWgts, self.distDict  = self.originParams(self.dfDmds, self.dfDist)
         self.dmdsLMD, self.destList, self.destVolWgts, self.destDistDict = self.destParams(self.dfDmds, self.dfDist)
     def necessaryData(self, data, distance_data):
-        pathList = data.dfP[~(data.dfP['originID'].str.contains('F'))]['pathID'].tolist()
+        pathList = data.dfP[~(data.dfP['arc1_type'].str.contains('FC->'))]['pathID'].tolist()
         #dictionary of demands for each origin location
-        dfDmds = data.dfP[~(data.dfP['originID'].str.contains('F'))][['demandID','originID','finalDest','wgt']].drop_duplicates(columns='demandID').copy() 
+        dfDmds = data.dfP[~(data.dfP['arc1_type'].str.contains('FC->'))][['demandID','originID','finalDest','wgt']].drop_duplicates(subset=['demandID']).copy() 
         # read in distance data dataframe
         dfDist = pd.read_csv(distance_data)
         
@@ -49,22 +49,26 @@ class heuristicData:
         origVolWgts = dfWgtSum['weights'].tolist()
 
         #getting vendor-only distance dictionary from dfDist
+        dfDist = dfDist[(dfDist['locationID1'].isin(origList))
+                        &(dfDist['locationID2'].isin(origList))].copy()
         distDict = distDF_toDict(dfDist, origin=True)
         
         return dmdsOrig, origList, origVolWgts, distDict
     
-    def destParams(self, dfDmds):
+    def destParams(self, dfDmds, dfDist):
         #dictionary of demands for each destination location
-        dmdsLMD = dfDmds.groupby(['destID'])['demandID'].apply(list).to_dict() 
+        dmdsLMD = dfDmds.groupby(['finalDest'])['demandID'].apply(list).to_dict() 
         #aggregating destination volume to calculate weights
-        dfWgtSum = dfDmds.groupby('destID').agg({'wgt':'sum'}).reset_index()
+        dfWgtSum = dfDmds.groupby('finalDest').agg({'wgt':'sum'}).reset_index()
         dfWgtSum = dfWgtSum.sort_values(by = 'wgt', ascending = False)
-        destList = dfWgtSum['destID'].tolist() 
+        destList = dfWgtSum['finalDest'].tolist() 
         dfWgtSum['weights'] = dfWgtSum['wgt'].values/dfWgtSum['wgt'].sum()
         destVolWgts = dfWgtSum['weights'].tolist()
         
         #creating dictionary where keys are dest IDs and values are lists of other dests ordered by distance to the key
-        distDict = distDF_toDict(self.dfDist, origin=False)
+        dfDist = dfDist[(dfDist['locationID1'].isin(destList))
+                        &(dfDist['locationID2'].isin(destList))].copy()
+        distDict = distDF_toDict(dfDist, origin=False)
         
         return dmdsLMD, destList, destVolWgts, distDict
     
@@ -101,9 +105,7 @@ def distOriginList(vndList, vndWgts, distDict, prevVnds):
             prevVnds.insert(0,vndList[i])
             prevVnds = prevVnds[0:tabuLength]
             break
-    # print('wtdDist origin: '+str(vndList[origin]))
     originList = [vndList[origin]] + distDict[vndList[origin]].copy()
-    # print(prevVnds)
     return originList, prevVnds
 
 def selPaths(listOrd, dfP, dmds, pathLen, ct = 0, newList = True):
@@ -124,7 +126,7 @@ def selPaths(listOrd, dfP, dmds, pathLen, ct = 0, newList = True):
             break
     return selectedPaths, newList, ct
 
-def select(data, heurData, newList, selNH, prevVnds, lmdOrd, lmd, fc, pathLen, iterCount, prevLMDs, origOrd, orig):
+def select(data, heurData, newList, selNH, prevVnds, lmdOrd, lmd, fc, pathLen, iterCount):
     np.random.seed(iterCount)
     ##  NH2
     if selNH == 'vndWtdDist':
@@ -132,6 +134,7 @@ def select(data, heurData, newList, selNH, prevVnds, lmdOrd, lmd, fc, pathLen, i
         selectedPaths, newListVndPH, ctPH = selPaths(origOrd, data.dfP, heurData.dmdsOrig, pathLen)
     ##  NH3
     elif selNH == 'randLMD':
+        origOrd = []
         if newList:
             lmd = 0
             lmdOrd = randList(list(heurData.dmdsLMD))
@@ -144,4 +147,4 @@ def select(data, heurData, newList, selNH, prevVnds, lmdOrd, lmd, fc, pathLen, i
         selectedPaths, newListVndPH, ctPH = selPaths(origOrd, data.dfP, heurData.dmdsOrig, pathLen)      
     else:
         raise Exception('selNH not set properly')
-    return newList, selectedPaths, prevVnds, lmdOrd, lmd, fc, prevLMDs, origOrd, orig
+    return newList, selectedPaths, prevVnds, lmdOrd, lmd, fc, origOrd

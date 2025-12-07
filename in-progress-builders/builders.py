@@ -3,16 +3,13 @@
 Reusable builders for variables, objectives and shared constraints used by
 the four models (sm, mmtc, mmtc_odt_pw, mmtc_odt_bin).
 
-Each function accepts a Gurobi model and either 'data' or 'odt_data' (or both)
-objects with the attributes described in your original monolithic script.
-
 Functions mutate the model in-place. They return or update a `vars` dict to
 collect variable references.
 """
 from typing import Dict, Tuple, Iterable
 import gurobipy as gp
 from gurobipy import GRB
-from .optFunctions import defPMObj
+from optFunctions import defPMObj
 
 
 def gen_zvals(data):
@@ -74,15 +71,15 @@ def add_odt_flow_constraints(model: gp.Model, data, odt_data, vars: Dict):
     # lower bound: u_p >= path_wgt * sum(conRate * w_var) - (1-x_p)*conRMax*path_wgt
     model.addConstrs(
         (u[p] >= data.pathParams[p]['wgt'] * gp.quicksum(
-            odt_data.conRates[(odt_data.path_to_dmd[p], t)] * w[(odt_data.path_to_dmd[p], t)]
-            for t in odt_data.conLTs[odt_data.path_to_dmd[p]]
-        ) - (1 - x[p]) * odt_data.conRMax[odt_data.path_to_dmd[p]] * data.pathParams[p]['wgt']
+            odt_data.conRates[(odt_data.pathDmd[p], t)] * w[(odt_data.pathDmd[p], t)]
+            for t in odt_data.conODTs[odt_data.pathDmd[p]]
+        ) - (1 - x[p]) * odt_data.conRMax[odt_data.pathDmd[p]] * data.pathParams[p]['wgt']
         for p in odt_data.conPaths),
         name='odt_flow_lower'
     )
     # upper bound big-M: u_p <= conRMax * path_wgt * x_p
     model.addConstrs(
-        (u[p] <= odt_data.conRMax[odt_data.path_to_dmd[p]] * data.pathParams[p]['wgt'] * x[p]
+        (u[p] <= odt_data.conRMax[odt_data.pathDmd[p]] * data.pathParams[p]['wgt'] * x[p]
         for p in odt_data.conPaths),
         name='odt_flow_upper'
     )
@@ -92,8 +89,9 @@ def add_frequency_activation_piecewise(model: gp.Model, data, vars: Dict):
     """f <= bigM * y activation for piecewise (f,y)."""
     f = vars['f']; y = vars['y']
     model.addConstrs(
-        f[a, m] <= data.bigMVals[a, m] * y[a, m]
-        for (a, m) in data.arcMode
+        (f[a, m] <= data.bigMVals[a, m] * y[a, m]
+        for (a, m) in data.arcMode),
+        name='freq_activation_piecewise'
     )
 
 
@@ -101,9 +99,10 @@ def add_frequency_activation_binary(model: gp.Model, data, vars: Dict):
     """Single z selection per arc constraint for binary formulation."""
     z = vars['z']
     model.addConstrs(
-        gp.quicksum(gp.quicksum(z[a, m, f] for f in range(1, data.bigMVals[a, m] + 1))
+        (gp.quicksum(gp.quicksum(z[a, m, f] for f in range(1, data.bigMVals[a, m] + 1))
                     for m in data.modeDict[a]) <= 1
-        for a in data.arcs
+        for a in data.arcs),
+        name='freq_activation_binary'
     )
 
 
@@ -117,16 +116,18 @@ def add_volume_balance(model: gp.Model, data, vars: Dict, odt_data=None):
     u = vars.get('u', None)
     if odt_data:
         model.addConstrs(
-            gp.quicksum(v[a, m] for m in data.modeDict[a]) >=
+            (gp.quicksum(v[a, m] for m in data.modeDict[a]) ==
             gp.quicksum(u[p] for p in data.arcPaths[a] if p in odt_data.conPaths)
-            + gp.quicksum(data.pathParams[p]['wgt'] * x[p] for p in data.arcPaths[a] if p not in odt_data.conPaths)
-            for a in data.arcs
+            + gp.quicksum(data.pathParams[p]['wgt'] * x[p] for p in data.arcPaths[a] if p in odt_data.nonConPaths)
+            for a in data.arcs),
+            name='volume_balance_odt'
         )
     else:
         model.addConstrs(
-            gp.quicksum(v[a, m] for m in data.modeDict[a]) ==
+            (gp.quicksum(v[a, m] for m in data.modeDict[a]) ==
             gp.quicksum(data.pathParams[p]['wgt'] * x[p] for p in data.arcPaths[a])
-            for a in data.arcs
+            for a in data.arcs),
+            name='volume_balance'
         )
 
 
@@ -134,13 +135,15 @@ def add_maxmin_bounds_piecewise(model: gp.Model, data, vars: Dict):
     """v <= maxWgt * f  and  v >= minWgt * f (if minWgt != 0), for piecewise (f) formulation."""
     v = vars['v']; f = vars['f']
     model.addConstrs(
-        v[a, m] <= data.arcParams[a, m]['maxWgt'] * f[a, m]
-        for (a, m) in data.arcMode
+        (v[a, m] <= data.arcParams[a, m]['maxWgt'] * f[a, m]
+        for (a, m) in data.arcMode),
+        name='max_bound_piecewise'
     )
     model.addConstrs(
-        v[a, m] >= data.arcParams[a, m]['minWgt'] * f[a, m]
+        (v[a, m] >= data.arcParams[a, m]['minWgt'] * f[a, m]
         for (a, m) in data.arcMode
-        if data.arcParams[a, m]['minWgt'] != 0
+        if data.arcParams[a, m]['minWgt'] != 0),
+        name='min_bound_piecewise'
     )
 
 
@@ -149,15 +152,17 @@ def add_maxmin_bounds_binary(model: gp.Model, data, vars: Dict):
     Here f is index in the z triple, so 1/min(...) factors and sums are used where needed."""
     v = vars['v']; z = vars['z']
     model.addConstrs(
-        v[a, m] <= data.arcParams[a, m]['maxWgt'] *
+        (v[a, m] <= data.arcParams[a, m]['maxWgt'] *
         gp.quicksum(f * z[a, m, f] for f in range(1, data.bigMVals[a, m] + 1))
-        for (a, m) in data.arcMode
+        for (a, m) in data.arcMode),
+        name='max_bound_binary'
     )
     model.addConstrs(
-        v[a, m] >= data.arcParams[a, m]['minWgt'] *
+        (v[a, m] >= data.arcParams[a, m]['minWgt'] *
         gp.quicksum(f * z[a, m, f] for f in range(1, data.bigMVals[a, m] + 1))
         for (a, m) in data.arcMode
-        if data.arcParams[a, m]['minWgt'] != 0
+        if data.arcParams[a, m]['minWgt'] != 0),
+        name='min_bound_binary'
     )
 
 
@@ -165,8 +170,9 @@ def add_one_mode_per_arc_piecewise(model: gp.Model, data, vars: Dict):
     """Only one mode active per arc (piecewise with y)."""
     y = vars['y']
     model.addConstrs(
-        gp.quicksum(y[a, m] for m in data.modeDict[a]) <= 1
-        for a in data.arcs
+        (gp.quicksum(y[a, m] for m in data.modeDict[a]) <= 1
+        for a in data.arcs),
+        name='one_mode_per_arc_piecewise'
     )
 
 
@@ -174,8 +180,9 @@ def add_one_lead_time_per_conversion(model: gp.Model, odt_data, vars: Dict):
     """Each conversion demand chooses exactly one lead time (unless direct route used)."""
     w = vars['w']; x = vars['x']
     model.addConstrs(
-        gp.quicksum(w[(k, t)] for t in odt_data.conLTs[k]) == 1 - x[odt_data.dirRts[k]]
-        for k in odt_data.conDmds
+        (gp.quicksum(w[(k, t)] for t in odt_data.conODTs[k]) == 1 - x[odt_data.dirPaths[k]]
+        for k in odt_data.conDmds),
+        name='one_lead_time_per_conversion'
     )
 
 
@@ -184,7 +191,7 @@ def add_time_constraints_piecewise(model: gp.Model, data, odt_data, vars: Dict):
     Add time constraints for consolidation paths using piecewise (f,y) variables if present,
     otherwise falls back to requiring z-vars (binary) and uses an expression based on z.
 
-    LHS = (1/7) * sum_t (1/cVal(p,t) * (t - fixedTT) * w[path_to_dmd, t]) + (1-x_p)*arcCt
+    LHS = (1/7) * sum_t (1/cVal(p,t) * (t - fixedTT) * w[pathDmd, t]) + (1-x_p)*arcCt
     RHS = sum over arcs in path of (something depending on f or z)
     Note: if exact min(f, maxF[m]) terms are needed, the z-binary formulation is exact.
     """
@@ -198,8 +205,8 @@ def add_time_constraints_piecewise(model: gp.Model, data, odt_data, vars: Dict):
             gp.quicksum(
                 (1 / odt_data.cVals[(p, t)]) *
                 (t - data.pathParams[p]['fixedTT']) *
-                w[(odt_data.path_to_dmd[p], t)]
-                for t in odt_data.conLTs[odt_data.path_to_dmd[p]]
+                w[(odt_data.pathDmd[p], t)]
+                for t in odt_data.conODTs[odt_data.pathDmd[p]]
                 if (p, t) in odt_data.cVals
             )
             + (1 - x[p]) * data.pathParams[p]['arcCt']
@@ -221,8 +228,8 @@ def add_time_constraints_piecewise(model: gp.Model, data, odt_data, vars: Dict):
             gp.quicksum(
                 (1 / odt_data.cVals[(p, t)]) *
                 (t - data.pathParams[p]['fixedTT']) *
-                w[(odt_data.path_to_dmd[p], t)]
-                for t in odt_data.conLTs[odt_data.path_to_dmd[p]]
+                w[(odt_data.pathDmd[p], t)]
+                for t in odt_data.conODTs[odt_data.pathDmd[p]]
                 if (p, t) in odt_data.cVals
             )
             + (1 - x[p]) * data.pathParams[p]['arcCt']
@@ -241,11 +248,12 @@ def add_fc_time_constraints(model: gp.Model, data, odt_data, vars: Dict):
     """Special FC constraints that use cValsFC dict (for FC final-arc constraints)."""
     x = vars['x']; h = vars.get('h', None)
     model.addConstrs(
-        x[p] * (1 / (data.pathParams[p]['cVal'] * 7)) * data.pathParams[p]['w_hat']
+        (x[p] * (1 / (odt_data.cValsFC[p] * 7)) * data.pathParams[p]['w_hat']
         + (1 - x[p]) * data.pathParams[p]['arcCt']
         >= gp.quicksum(h[a] for a in data.arcsConstrPaths[p])
         for p in data.conPaths
-        if (p not in odt_data.conPaths) and (p in odt_data.cValsFC)
+        if (p not in odt_data.conPaths) and (p in odt_data.cValsFC)),
+        name='fc_time_constraints'
     )
 
 
@@ -266,12 +274,14 @@ def add_h_bounds_piecewise(model: gp.Model, data, vars: Dict, bigMTime=7, maxLTL
             )
     # relative bounds
     model.addConstrs(
-        h[a] >= (1 / bigMTime) * gp.quicksum(y[a, m] for m in data.modeDict[a])
-        for a in data.arcs
+        (h[a] >= (1 / bigMTime) * gp.quicksum(y[a, m] for m in data.modeDict[a])
+        for a in data.arcs),
+        name='h_lower_bound_piecewise'
     )
     model.addConstrs(
-        h[a] <= gp.quicksum(y[a, m] for m in data.modeDict[a])
-        for a in data.arcs
+       ( h[a] <= gp.quicksum(y[a, m] for m in data.modeDict[a])
+        for a in data.arcs),
+        name='h_upper_bound_piecewise'
     )
 
 
@@ -291,8 +301,8 @@ def add_time_constraints_binary(model: gp.Model, data, odt_data, vars: Dict):
         ((1 / 7) *
         gp.quicksum(
             (1 / odt_data.cVals[(p, t)]) * (t - data.pathParams[p]['fixedTT']) *
-            w[(odt_data.path_to_dmd[p], t)]
-            for t in odt_data.conLTs[odt_data.path_to_dmd[p]]
+            w[(odt_data.pathDmd[p], t)]
+            for t in odt_data.conODTs[odt_data.pathDmd[p]]
             if (p, t) in odt_data.cVals
         )
         + (1 - x[p]) * data.pathParams[p]['arcCt']
@@ -335,23 +345,26 @@ def add_mode_restrictions(model: gp.Model, data, vars: Dict):
     x = vars['x']
     if 'y' in vars:
         y = vars['y']
-        model.addConstrs(x[p] <= y[(data.arcTL[p], 0)] for p in data.arcTL)
+        model.addConstrs((x[p] <= y[(data.arcTL[p], 0)] for p in data.arcTL), name='mode_restriction_TL')
         model.addConstrs(
-            x[p] <= gp.quicksum(y[(data.arcLTL[p], m)] for m in data.modeDict[data.arcLTL[p]] if m != 0)
-            for p in data.arcLTL
+            (x[p] <= gp.quicksum(y[(data.arcLTL[p], m)] for m in data.modeDict[data.arcLTL[p]] if m != 0)
+            for p in data.arcLTL),
+            name='mode_restriction_LTL'
         )
     elif 'z' in vars:
         z = vars['z']
         model.addConstrs(
-            x[p] <= gp.quicksum(z[data.arcTL[p], 0, f] for f in range(1, data.bigMVals[data.arcTL[p], 0] + 1))
-            for p in data.arcTL
+            (x[p] <= gp.quicksum(z[data.arcTL[p], 0, f] for f in range(1, data.bigMVals[data.arcTL[p], 0] + 1))
+            for p in data.arcTL),
+            name='mode_restriction_TL'
         )
         model.addConstrs(
-            x[p] <= gp.quicksum(
+            (x[p] <= gp.quicksum(
                 gp.quicksum(z[data.arcLTL[p], m, f]
                             for f in range(1, data.bigMVals[data.arcLTL[p], m] + 1))
                 for m in data.modeDict[data.arcLTL[p]] if m != 0)
-            for p in data.arcLTL
+            for p in data.arcLTL),
+            name='mode_restriction_LTL'
         )
 
 def build_revenue_and_costs(model, data, odt_data, vars,
@@ -406,14 +419,14 @@ def build_revenue_and_costs(model, data, odt_data, vars,
     # consolidation path cost: two cases:
     # - if a conPath is not a direct path in dirPaths -> use ppCost * u[p]
     # - if it is a direct candidate (dirPaths maps demand->direct path), treat it as x-cost (direct path cost)
-    costPath_conv_pp = gp.quicksum(ppCost[p] * u[p] for p in odt_data.conPaths if odt_data.dirPaths.get(p) is None)
-    costPath_conv_dir = gp.quicksum(dirPathCost[p] * x[p] for p in odt_data.conPaths if odt_data.dirPaths.get(p) is not None)
+    costPath_conv_pp = gp.quicksum(ppCost[p] * u[p] for p in odt_data.conPaths if p not in odt_data.dirPaths.values())
+    costPath_conv_dir = gp.quicksum(dirPathCost[p] * x[p] for p in odt_data.dirPaths.values())
 
     costPath_expr = costPath_nonconv + costPath_conv_pp + costPath_conv_dir
 
     # --- revenue ---
     # revenue from conversion demands (depends on chosen lead time via w, and direct sales if direct route chosen)
-    # note: odt_data.conODTs is the demand->list of ODTs (you earlier named conLTs/conODTs)
+    # note: odt_data.conODTs is the demand->list of ODTs 
     rev_conv = gp.quicksum(
         (sales[k] - cogs[k]) *
         gp.quicksum(odt_data.conRates[(k, t)] * w[(k, t)] for t in odt_data.conODTs[k])
