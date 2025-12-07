@@ -1,6 +1,6 @@
 # ODTQ-MMC±X Model Files
 
-📅 **Last updated:** November 11, 2025  
+📅 **Last updated:** December 6, 2025  
 
 ---
 
@@ -15,16 +15,19 @@ This repository accompanies the paper:
 ---
 ## Code Description
 
+## Code Description
+
 All Python code files are now included and operational. The repository is organized into modular components that build, solve, and analyze the ODTQ-MMC±X models.
 
 | File | Description |
-|------|--------------|
-| **`builders.py`** | Defines the fundamental building blocks for constructing the optimization models. |
+| :--- | :--- |
 | **`optFunctions.py`** | Contains data-processing utilities, helper functions for reading input data, and class definitions (e.g., `data`, `odt_data`) used by both the MIP and heuristic models. |
 | **`heuristicFunctions.py`** | Implements functions for the heuristic approach. |
-| **`mmtc_odt_bin.py`** | Builds the binary ODTQ-MMC±X MIP model. |
-| **`mmtc_odt_pw.py`** | Builds the piecewise-linear ODTQ-MMC±X MIP model. |
+| **`mmtc_odt_bin_mip.py`** | Builds the binary ODTQ-MMC±X MIP model. |
+| **`mmtc_odt_pw_mip.py`** | Builds the piecewise-linear ODTQ-MMC±X MIP model. |
+| **`mmtc_odt_bin_mip_reject.py`**| Builds the binary MIP model allowing for order rejection (used for Table 8 results). |
 | **`heuristic.py`** | Main script for running heuristic models. Integrates data loading, model selection, and solution execution for user-specified model types. |
+| **`add_ltl.py`** | Script for handling Less-Than-Truckload (LTL) additions (used for Table 8 results). |
 
 ---
 
